@@ -1,12 +1,13 @@
+#!python3
 import requests
 import json
+import csv
 from datetime import datetime, timedelta
 import logging
 import os
 import argparse
-from typing import List, Dict, Optional, Tuple
-import csv
-from pathlib import Path
+import sys
+from typing import List, Dict, Optional, Union
 
 # Set up logging
 logging.basicConfig(
@@ -18,7 +19,7 @@ logging.basicConfig(
     ]
 )
 
-class ZohoAPI:
+class ZohoAPIEnhanced:
     def __init__(self, organization_id: str, client_id: str, client_secret: str, refresh_token: str):
         self.base_url = "https://books.zoho.com/api/v3"
         self.organization_id = organization_id
@@ -56,280 +57,182 @@ class ZohoAPI:
             "organization_id": self.organization_id
         }
 
-    def get_invoices(self, status: Optional[str] = None, date_start: Optional[str] = None, 
-                     date_end: Optional[str] = None) -> List[Dict]:
-        """Fetch invoices with optional filters."""
+    def list_customers(self, search_term: Optional[str] = None, 
+                       page: int = 1, 
+                       per_page: int = 200) -> List[Dict]:
+        """List customers with optional search and pagination."""
+        url = f"{self.base_url}/contacts"
+        params = {
+            "page": page,
+            "per_page": per_page
+        }
+        
+        if search_term:
+            params["search_text"] = search_term
+        
+        response = requests.get(
+            url, 
+            headers=self.get_headers(), 
+            params=params
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch customers: {response.text}")
+        
+        return response.json()["contacts"]
+
+    def create_customer(self, 
+                        contact_name: str, 
+                        email: Optional[str] = None, 
+                        phone: Optional[str] = None,
+                        billing_address: Optional[Dict] = None) -> Dict:
+        """Create a new customer in Zoho Books."""
+        url = f"{self.base_url}/contacts"
+        
+        customer_data = {
+            "contact_name": contact_name,
+            "email": email,
+            "phone": phone,
+            "billing_address": billing_address or {}
+        }
+        
+        response = requests.post(
+            url,
+            headers=self.get_headers(),
+            data=json.dumps(customer_data)
+        )
+        
+        if response.status_code != 201:
+            raise Exception(f"Failed to create customer: {response.text}")
+        
+        return response.json()["contact"]
+
+    def get_invoices(self, 
+                     status: Optional[str] = None, 
+                     start_date: Optional[str] = None, 
+                     end_date: Optional[str] = None,
+                     customer_id: Optional[str] = None) -> List[Dict]:
+        """Fetch invoices with advanced filtering."""
         url = f"{self.base_url}/invoices"
         params = {}
         
         if status:
             params["status"] = status
-            params["filter_by"] = f"Status.{status.capitalize()}"
-            
-        if date_start:
-            params["date_start"] = date_start
-        if date_end:
-            params["date_end"] = date_end
         
-        response = requests.get(url, headers=self.get_headers(), params=params)
+        if start_date:
+            params["date_after"] = start_date
+        
+        if end_date:
+            params["date_before"] = end_date
+        
+        if customer_id:
+            params["customer_id"] = customer_id
+        
+        response = requests.get(
+            url, 
+            headers=self.get_headers(), 
+            params=params
+        )
+        
         if response.status_code != 200:
             raise Exception(f"Failed to fetch invoices: {response.text}")
         
         return response.json()["invoices"]
 
-    def get_customers(self) -> List[Dict]:
-        """Fetch all customers."""
-        url = f"{self.base_url}/contacts?contact_type=customer"
-        response = requests.get(url, headers=self.get_headers())
+    def export_invoices(self, 
+                        export_format: str = 'csv', 
+                        filename: Optional[str] = None,
+                        **filter_params) -> str:
+        """Export invoices to CSV or JSON."""
+        # Fetch invoices with applied filters
+        invoices = self.get_invoices(**filter_params)
         
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch customers: {response.text}")
+        # Generate default filename if not provided
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"zoho_invoices_{timestamp}"
+        
+        if export_format.lower() == 'csv':
+            # Prepare CSV export
+            output_filename = f"{filename}.csv"
+            with open(output_filename, 'w', newline='') as csvfile:
+                # Extract keys from first invoice to use as headers
+                if invoices:
+                    fieldnames = list(invoices[0].keys())
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    writer.writeheader()
+                    for invoice in invoices:
+                        writer.writerow(invoice)
             
-        return response.json()["contacts"]
-
-    def get_customer_by_name(self, name: str) -> Optional[Dict]:
-        """Find a customer by name (case-insensitive partial match)."""
-        customers = self.get_customers()
-        name_lower = name.lower()
+            return output_filename
         
-        matches = [c for c in customers if name_lower in c["contact_name"].lower()]
-        return matches[0] if matches else None
-
-    def create_quick_invoice(self, amount: float, description: str,
-                           customer_id: Optional[str] = None,
-                           line_items: Optional[List[Dict]] = None,
-                           payment_terms: int = 0,
-                           custom_fields: Optional[Dict] = None) -> Dict:
-        """Create a quick invoice with optional custom line items and fields."""
-        url = f"{self.base_url}/invoices"
-        
-        if not customer_id and not self.default_customer_id:
-            raise ValueError("No customer ID provided and no default customer ID set")
-        
-        if not line_items:
-            line_items = [{
-                "name": description,
-                "rate": amount,
-                "quantity": 1
-            }]
+        elif export_format.lower() == 'json':
+            # Prepare JSON export
+            output_filename = f"{filename}.json"
+            with open(output_filename, 'w') as jsonfile:
+                json.dump(invoices, jsonfile, indent=2)
             
-        invoice_data = {
-            "customer_id": customer_id or self.default_customer_id,
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "line_items": line_items,
-            "payment_terms": payment_terms,
-            "payment_terms_label": "Due on Receipt" if payment_terms == 0 else f"Net {payment_terms}"
+            return output_filename
+        
+        else:
+            raise ValueError(f"Unsupported export format: {export_format}")
+
+    def generate_payment_summary(self, 
+                                 start_date: Optional[str] = None, 
+                                 end_date: Optional[str] = None) -> Dict:
+        """Generate a comprehensive payment summary."""
+        # Fetch invoices (paid and unpaid)
+        paid_invoices = self.get_invoices(status="paid", start_date=start_date, end_date=end_date)
+        unpaid_invoices = self.get_invoices(status="unpaid", start_date=start_date, end_date=end_date)
+        
+        summary = {
+            "total_invoices": len(paid_invoices) + len(unpaid_invoices),
+            "paid_invoices": len(paid_invoices),
+            "unpaid_invoices": len(unpaid_invoices),
+            "total_invoice_amount": sum(float(inv.get('total', 0)) for inv in paid_invoices + unpaid_invoices),
+            "total_paid_amount": sum(float(inv.get('total', 0)) for inv in paid_invoices),
+            "total_unpaid_amount": sum(float(inv.get('total', 0)) for inv in unpaid_invoices),
+            "date_range": {
+                "start": start_date or "All time",
+                "end": end_date or "All time"
+            }
         }
         
-        if custom_fields:
-            invoice_data["custom_fields"] = custom_fields
-        
-        response = requests.post(
-            url,
-            headers=self.get_headers(),
-            data=json.dumps(invoice_data)
-        )
-        
-        if response.status_code != 201:
-            raise Exception(f"Failed to create invoice: {response.text}")
-            
-        return response.json()["invoice"]
-
-    def apply_payment(self, invoice_id: str, amount: float, payment_date: str,
-                     payment_mode: str = "cash", reference_number: Optional[str] = None,
-                     notes: Optional[str] = None) -> Dict:
-        """Apply payment to a specific invoice."""
-        url = f"{self.base_url}/customerpayments"
-        
-        payment_data = {
-            "payment_mode": payment_mode,
-            "amount": amount,
-            "date": payment_date,
-            "reference_number": reference_number or f"PAY-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-            "invoices": [{
-                "invoice_id": invoice_id,
-                "amount_applied": amount
-            }]
-        }
-        
-        if notes:
-            payment_data["notes"] = notes
-        
-        response = requests.post(
-            url, 
-            headers=self.get_headers(), 
-            data=json.dumps(payment_data)
-        )
-        
-        if response.status_code != 201:
-            raise Exception(f"Failed to apply payment to invoice {invoice_id}: {response.text}")
-        
-        return response.json()
-
-    def void_invoice(self, invoice_id: str) -> Dict:
-        """Void an existing invoice."""
-        url = f"{self.base_url}/invoices/{invoice_id}/void"
-        response = requests.post(url, headers=self.get_headers())
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to void invoice {invoice_id}: {response.text}")
-            
-        return response.json()
-
-    def generate_statement(self, customer_id: str, start_date: str, end_date: str) -> Dict:
-        """Generate a customer statement for a date range."""
-        url = f"{self.base_url}/contacts/{customer_id}/statements"
-        params = {
-            "start_date": start_date,
-            "end_date": end_date
-        }
-        
-        response = requests.get(url, headers=self.get_headers(), params=params)
-        if response.status_code != 200:
-            raise Exception(f"Failed to generate statement: {response.text}")
-            
-        return response.json()
-
-def create_quick_paid_invoice(zoho: ZohoAPI, amount: float, description: str,
-                            customer_id: Optional[str] = None,
-                            payment_mode: str = "cash",
-                            custom_fields: Optional[Dict] = None) -> Dict:
-    """Create an invoice and immediately apply payment."""
-    # Create the invoice
-    invoice = zoho.create_quick_invoice(
-        amount=amount,
-        description=description,
-        customer_id=customer_id,
-        custom_fields=custom_fields
-    )
-    logging.info(f"Created invoice {invoice['invoice_id']} for amount {amount}")
-    
-    # Apply payment
-    payment = zoho.apply_payment(
-        invoice_id=invoice["invoice_id"],
-        amount=amount,
-        payment_date=datetime.now().strftime("%Y-%m-%d"),
-        payment_mode=payment_mode
-    )
-    logging.info(f"Applied payment for invoice {invoice['invoice_id']}")
-    
-    return {"invoice": invoice, "payment": payment}
-
-def process_open_invoices(zoho: ZohoAPI, payment_mode: str = "cash", 
-                         max_age_days: Optional[int] = None):
-    """Process all open invoices with optional age filter."""
-    date_start = None
-    if max_age_days:
-        date_start = (datetime.now() - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
-    
-    logging.info("Fetching open invoices...")
-    open_invoices = zoho.get_invoices(status="unpaid", date_start=date_start)
-    logging.info(f"Found {len(open_invoices)} open invoices")
-    
-    results = []
-    for invoice in open_invoices:
-        try:
-            payment_date = datetime.now().strftime("%Y-%m-%d")
-            payment_result = zoho.apply_payment(
-                invoice_id=invoice["invoice_id"],
-                amount=float(invoice["balance"]),
-                payment_date=payment_date,
-                payment_mode=payment_mode
-            )
-            
-            results.append({
-                "invoice_id": invoice["invoice_id"],
-                "amount": invoice["balance"],
-                "status": "success"
-            })
-            
-            logging.info(
-                f"Successfully applied payment for invoice {invoice['invoice_id']}, "
-                f"amount: {invoice['balance']}"
-            )
-            
-        except Exception as e:
-            results.append({
-                "invoice_id": invoice["invoice_id"],
-                "amount": invoice["balance"],
-                "status": "failed",
-                "error": str(e)
-            })
-            logging.error(
-                f"Failed to process payment for invoice {invoice['invoice_id']}: {str(e)}"
-            )
-            continue
-    
-    return results
-
-def export_results_to_csv(results: List[Dict], filename: str):
-    """Export processing results to CSV file."""
-    if not results:
-        return
-        
-    fields = results[0].keys()
-    with open(filename, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(results)
-
-def process_bulk_invoices_from_csv(zoho: ZohoAPI, csv_file: str) -> List[Dict]:
-    """Create and pay multiple invoices from CSV file."""
-    results = []
-    with open(csv_file, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                result = create_quick_paid_invoice(
-                    zoho,
-                    amount=float(row['amount']),
-                    description=row['description'],
-                    customer_id=row.get('customer_id'),
-                    payment_mode=row.get('payment_mode', 'cash'),
-                    custom_fields=json.loads(row.get('custom_fields', '{}'))
-                )
-                results.append({
-                    "row": row,
-                    "status": "success",
-                    "invoice_id": result["invoice"]["invoice_id"]
-                })
-            except Exception as e:
-                results.append({
-                    "row": row,
-                    "status": "failed",
-                    "error": str(e)
-                })
-    return results
+        return summary
 
 def main():
-    parser = argparse.ArgumentParser(description='Zoho Invoice Payment Manager')
-    subparsers = parser.add_subparsers(dest='command', help='Command to execute')
+    parser = argparse.ArgumentParser(description='Advanced Zoho Invoice and Payment Management')
     
-    # Quick invoice command
-    quick = subparsers.add_parser('quick', help='Create a quick invoice with immediate payment')
-    quick.add_argument('--amount', type=float, required=True, help='Invoice amount')
-    quick.add_argument('--description', type=str, required=True, help='Invoice description')
-    quick.add_argument('--customer-id', type=str, help='Override default customer ID')
-    quick.add_argument('--payment-mode', type=str, default='cash', help='Payment mode')
-    quick.add_argument('--custom-fields', type=json.loads, help='Custom fields as JSON')
+    # Customer Management
+    customer_group = parser.add_argument_group('Customer Management')
+    customer_group.add_argument('--list-customers', action='store_true', 
+                                help='List all customers')
+    customer_group.add_argument('--search-customer', type=str, 
+                                help='Search customers by name or email')
+    customer_group.add_argument('--add-customer', nargs='+', 
+                                help='Add a new customer: name email phone')
     
-    # Process open invoices command
-    process = subparsers.add_parser('process', help='Process open invoices')
-    process.add_argument('--payment-mode', type=str, default='cash', help='Payment mode')
-    process.add_argument('--max-age-days', type=int, help='Maximum age of invoices to process')
-    process.add_argument('--export-csv', type=str, help='Export results to CSV file')
+    # Invoice Export
+    export_group = parser.add_argument_group('Invoice Export')
+    export_group.add_argument('--export-invoices', choices=['csv', 'json'], 
+                              help='Export invoices to specified format')
+    export_group.add_argument('--export-status', type=str, 
+                              choices=['paid', 'unpaid', 'draft'], 
+                              help='Filter invoices by status for export')
+    export_group.add_argument('--export-start-date', type=str, 
+                              help='Start date for invoice export (YYYY-MM-DD)')
+    export_group.add_argument('--export-end-date', type=str, 
+                              help='End date for invoice export (YYYY-MM-DD)')
     
-    # Bulk invoice processing from CSV
-    bulk = subparsers.add_parser('bulk', help='Process bulk invoices from CSV')
-    bulk.add_argument('--csv-file', type=str, required=True, help='Input CSV file')
-    bulk.add_argument('--export-csv', type=str, help='Export results to CSV file')
-    
-    # Customer management
-    customer = subparsers.add_parser('customer', help='Customer management')
-    customer.add_argument('--search', type=str, help='Search customer by name')
-    customer.add_argument('--statement', type=str, help='Generate statement for customer ID')
-    customer.add_argument('--start-date', type=str, help='Statement start date (YYYY-MM-DD)')
-    customer.add_argument('--end-date', type=str, help='Statement end date (YYYY-MM-DD)')
+    # Payment Summary
+    summary_group = parser.add_argument_group('Payment Summary')
+    summary_group.add_argument('--payment-summary', action='store_true', 
+                               help='Generate payment summary report')
+    summary_group.add_argument('--summary-start-date', type=str, 
+                               help='Start date for payment summary (YYYY-MM-DD)')
+    summary_group.add_argument('--summary-end-date', type=str, 
+                               help='End date for payment summary (YYYY-MM-DD)')
     
     args = parser.parse_args()
 
@@ -348,20 +251,65 @@ def main():
     
     try:
         # Initialize Zoho API client
-        zoho = ZohoAPI(**config)
+        zoho = ZohoAPIEnhanced(**config)
         
-        if args.command == 'quick':
-            result = create_quick_paid_invoice(
-                zoho,
-                amount=args.amount,
-                description=args.description,
-                customer_id=args.customer_id,
-                payment_mode=args.payment_mode,
-                custom_fields=args.custom_fields
-            )
-            logging.info(f"Quick invoice created and paid: {result['invoice']['invoice_number']}")
+        # Customer Management
+        if args.list_customers:
+            customers = zoho.list_customers()
+            print(json.dumps(customers, indent=2))
+        
+        if args.search_customer:
+            customers = zoho.list_customers(search_term=args.search_customer)
+            print(json.dumps(customers, indent=2))
+        
+        if args.add_customer:
+            if len(args.add_customer) < 1:
+                raise ValueError("At least customer name is required")
             
-        elif args.command == 'process':
-            results = process_open_invoices(
-                zoho,
-                
+            name = args.add_customer[0]
+            email = args.add_customer[1] if len(args.add_customer) > 1 else None
+            phone = args.add_customer[2] if len(args.add_customer) > 2 else None
+            
+            new_customer = zoho.create_customer(name, email, phone)
+            print("New customer created:")
+            print(json.dumps(new_customer, indent=2))
+        
+        # Invoice Export
+        if args.export_invoices:
+            export_params = {
+                "export_format": args.export_invoices
+            }
+            
+            if args.export_status:
+                export_params["status"] = args.export_status
+            
+            if args.export_start_date:
+                export_params["start_date"] = args.export_start_date
+            
+            if args.export_end_date:
+                export_params["end_date"] = args.export_end_date
+            
+            exported_file = zoho.export_invoices(**export_params)
+            print(f"Exported invoices to {exported_file}")
+        
+        # Payment Summary
+        if args.payment_summary:
+            summary_params = {}
+            
+            if args.summary_start_date:
+                summary_params["start_date"] = args.summary_start_date
+            
+            if args.summary_end_date:
+                summary_params["end_date"] = args.summary_end_date
+            
+            summary = zoho.generate_payment_summary(**summary_params)
+            print("Payment Summary:")
+            print(json.dumps(summary, indent=2))
+        
+    except Exception as e:
+        logging.error(f"Script execution failed: {str(e)}")
+        print(f"Error: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

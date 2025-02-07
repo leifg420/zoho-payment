@@ -4,6 +4,15 @@
 import argparse
 import logging
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('zoho_payments.log'),
+        logging.StreamHandler()
+    ]
+)
 # Import or define CredentialManager
 try:
     from credential_manager import CredentialManager  # type: ignore # Assuming it's defined in credential_manager.py

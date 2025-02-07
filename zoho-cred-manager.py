@@ -1,3 +1,4 @@
+#!python3
 import os
 from pathlib import Path
 import json
@@ -9,6 +10,15 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import logging
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('zoho_payments.log'),
+        logging.StreamHandler()
+    ]
+)
 class CredentialManager:
     def __init__(self, app_name: str = "zoho-invoice-manager"):
         self.app_name = app_name
