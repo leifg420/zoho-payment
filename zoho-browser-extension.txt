@@ -1,0 +1,465 @@
+# Project Structure
+# zoho-invoice-extension/
+#   ├── manifest.json
+#   ├── background.js
+#   ├── popup.html
+#   ├── popup.js
+#   ├── options.html
+#   ├── options.js
+#   ├── styles.css
+#   └── icons/
+#       ├── icon16.png
+#       ├── icon48.png
+#       └── icon128.png
+
+# 1. manifest.json
+{
+  "manifest_version": 3,
+  "name": "Zoho Invoice Manager",
+  "version": "1.0.0",
+  "description": "Manage Zoho Invoices and Payments",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "https://accounts.zoho.com/",
+    "https://books.zoho.com/"
+  ],
+  "host_permissions": [
+    "https://books.zoho.com/api/v3/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
+
+# 2. background.js
+chrome.runtime.onInstalled.addListener(() => {
+  // Initialize extension settings
+  chrome.storage.sync.set({
+    zohoConfig: {
+      organizationId: '',
+      clientId: '',
+      clientSecret: '',
+      refreshToken: ''
+    }
+  });
+});
+
+// Handle API requests from popup or other parts of the extension
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'fetchAccessToken') {
+    fetchAccessToken(request.config)
+      .then(token => sendResponse({ token: token }))
+      .catch(error => sendResponse({ error: error.message }));
+    return true; // Indicates we wish to send a response asynchronously
+  }
+  
+  if (request.action === 'callZohoAPI') {
+    callZohoAPI(request.config, request.endpoint, request.method, request.data)
+      .then(response => sendResponse({ success: true, data: response }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+});
+
+async function fetchAccessToken(config) {
+  const response = await fetch('https://accounts.zoho.com/oauth/v2/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      refresh_token: config.refreshToken,
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      grant_type: 'refresh_token'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch access token');
+  }
+
+  const data = await response.json();
+  return data.access_token;
+}
+
+async function callZohoAPI(config, endpoint, method = 'GET', data = null) {
+  const accessToken = await fetchAccessToken(config);
+  
+  const headers = {
+    'Authorization': `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+    'organization_id': config.organizationId
+  };
+
+  const options = {
+    method: method,
+    headers: headers
+  };
+
+  if (data) {
+    options.body = JSON.stringify(data);
+  }
+
+  const response = await fetch(`https://books.zoho.com/api/v3/${endpoint}`, options);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API call failed: ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+# 3. popup.html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Zoho Invoice Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Zoho Invoice Manager</h1>
+    
+    <div class="section">
+      <h2>Quick Actions</h2>
+      <button id="listCustomersBtn">List Customers</button>
+      <button id="createInvoiceBtn">Create Invoice</button>
+      <button id="generateReportBtn">Generate Report</button>
+    </div>
+
+    <div class="section">
+      <h2>Customer Management</h2>
+      <input type="text" id="customerName" placeholder="Customer Name">
+      <input type="text" id="customerEmail" placeholder="Email">
+      <button id="addCustomerBtn">Add Customer</button>
+    </div>
+
+    <div class="section">
+      <h2>Invoice Creation</h2>
+      <input type="text" id="invoiceDescription" placeholder="Description">
+      <input type="number" id="invoiceAmount" placeholder="Amount">
+      <button id="createQuickInvoiceBtn">Create Quick Invoice</button>
+    </div>
+
+    <div id="resultArea" class="result-area"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
+
+# 4. popup.js
+document.addEventListener('DOMContentLoaded', () => {
+  // Retrieve stored configuration
+  chrome.storage.sync.get(['zohoConfig'], (result) => {
+    const config = result.zohoConfig || {};
+    
+    // Check if configuration is complete
+    if (!config.organizationId || !config.clientId || !config.clientSecret || !config.refreshToken) {
+      document.getElementById('resultArea').innerHTML = 
+        '<p class="error">Please configure Zoho API settings in Options</p>';
+      return;
+    }
+
+    // List Customers
+    document.getElementById('listCustomersBtn').addEventListener('click', async () => {
+      try {
+        const response = await sendAPIRequest(config, 'contacts', 'GET');
+        displayResults(response.contacts);
+      } catch (error) {
+        displayError(error);
+      }
+    });
+
+    // Add Customer
+    document.getElementById('addCustomerBtn').addEventListener('click', async () => {
+      const name = document.getElementById('customerName').value;
+      const email = document.getElementById('customerEmail').value;
+
+      if (!name) {
+        displayError('Customer name is required');
+        return;
+      }
+
+      try {
+        const customerData = {
+          contact_name: name,
+          email: email
+        };
+
+        const response = await sendAPIRequest(config, 'contacts', 'POST', customerData);
+        displayResults(response.contact, 'Customer Added Successfully');
+      } catch (error) {
+        displayError(error);
+      }
+    });
+
+    // Create Quick Invoice
+    document.getElementById('createQuickInvoiceBtn').addEventListener('click', async () => {
+      const description = document.getElementById('invoiceDescription').value;
+      const amount = document.getElementById('invoiceAmount').value;
+
+      if (!description || !amount) {
+        displayError('Description and amount are required');
+        return;
+      }
+
+      try {
+        const invoiceData = {
+          customer_name: 'Default Customer', // You might want to make this dynamic
+          line_items: [{
+            name: description,
+            rate: parseFloat(amount),
+            quantity: 1
+          }],
+          date: new Date().toISOString().split('T')[0]
+        };
+
+        const response = await sendAPIRequest(config, 'invoices', 'POST', invoiceData);
+        displayResults(response.invoice, 'Invoice Created Successfully');
+      } catch (error) {
+        displayError(error);
+      }
+    });
+
+    // Generate Report
+    document.getElementById('generateReportBtn').addEventListener('click', async () => {
+      try {
+        const endDate = new Date().toISOString().split('T')[0];
+        const startDate = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().split('T')[0];
+
+        const response = await sendAPIRequest(config, `invoices?date_after=${startDate}&date_before=${endDate}`, 'GET');
+        
+        // Basic report generation
+        const report = {
+          totalInvoices: response.invoices.length,
+          totalAmount: response.invoices.reduce((sum, inv) => sum + parseFloat(inv.total || 0), 0),
+          startDate: startDate,
+          endDate: endDate
+        };
+
+        displayResults(report, 'Monthly Invoice Report');
+      } catch (error) {
+        displayError(error);
+      }
+    });
+  });
+});
+
+// Utility function to send API requests
+async function sendAPIRequest(config, endpoint, method, data = null) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      action: 'callZohoAPI',
+      config: config,
+      endpoint: endpoint,
+      method: method,
+      data: data
+    }, (response) => {
+      if (response.success) {
+        resolve(response.data);
+      } else {
+        reject(new Error(response.error));
+      }
+    });
+  });
+}
+
+// Display results in the result area
+function displayResults(data, title = 'Results') {
+  const resultArea = document.getElementById('resultArea');
+  resultArea.innerHTML = `
+    <h3>${title}</h3>
+    <pre>${JSON.stringify(data, null, 2)}</pre>
+  `;
+}
+
+// Display errors
+function displayError(error) {
+  const resultArea = document.getElementById('resultArea');
+  resultArea.innerHTML = `
+    <p class="error">Error: ${error.message || error}</p>
+  `;
+}
+
+# 5. options.html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Zoho Invoice Manager - Settings</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Zoho API Configuration</h1>
+    <form id="zohoConfigForm">
+      <div class="form-group">
+        <label for="organizationId">Organization ID:</label>
+        <input type="text" id="organizationId" required>
+      </div>
+      <div class="form-group">
+        <label for="clientId">Client ID:</label>
+        <input type="text" id="clientId" required>
+      </div>
+      <div class="form-group">
+        <label for="clientSecret">Client Secret:</label>
+        <input type="password" id="clientSecret" required>
+      </div>
+      <div class="form-group">
+        <label for="refreshToken">Refresh Token:</label>
+        <input type="password" id="refreshToken" required>
+      </div>
+      <button type="submit">Save Configuration</button>
+    </form>
+    <div id="status"></div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
+
+# 6. options.js
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('zohoConfigForm');
+  const status = document.getElementById('status');
+
+  // Load saved configuration
+  chrome.storage.sync.get(['zohoConfig'], (result) => {
+    const config = result.zohoConfig || {};
+    
+    document.getElementById('organizationId').value = config.organizationId || '';
+    document.getElementById('clientId').value = config.clientId || '';
+    document.getElementById('clientSecret').value = config.clientSecret || '';
+    document.getElementById('refreshToken').value = config.refreshToken || '';
+  });
+
+  // Save configuration
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+
+    const zohoConfig = {
+      organizationId: document.getElementById('organizationId').value,
+      clientId: document.getElementById('clientId').value,
+      clientSecret: document.getElementById('clientSecret').value,
+      refreshToken: document.getElementById('refreshToken').value
+    };
+
+    // Validate configuration
+    if (!zohoConfig.organizationId || !zohoConfig.clientId || 
+        !zohoConfig.clientSecret || !zohoConfig.refreshToken) {
+      status.textContent = 'Please fill in all fields.';
+      status.style.color = 'red';
+      return;
+    }
+
+    // Save to chrome storage
+    chrome.storage.sync.set({ zohoConfig }, () => {
+      status.textContent = 'Configuration saved successfully!';
+      status.style.color = 'green';
+    });
+  });
+});
+
+# 7. styles.css
+body {
+  width: 400px;
+  padding: 10px;
+  font-family: Arial, sans-serif;
+  background-color: #f4f4f4;
+}
+
+.container {
+  max-width: 380px;
+  margin: 0 auto;
+}
+
+.section {
+  background-color: white;
+  border-radius: 5px;
+  padding: 15px;
+  margin-bottom: 15px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+input {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+button {
+  width: 100%;
+  padding: 10px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+button:hover {
+  background-color: #45a049;
+}
+
+.result-area {
+  background-color: white;
+  border-radius: 5px;
+  padding: 15px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.error {
+  color: red;
+  font-weight: bold;
+}
+
+# 8. README.md
+# Zoho Invoice Manager - Brave Browser Extension
+
+## Features
+- List Customers
+- Add New Customers
+- Create Quick Invoices
+- Generate Monthly Reports
+
+## Setup
+1. Obtain Zoho API Credentials
+2. Configure Extension in Options
+3. Start Managing Invoices!
+
+## Installation
+1. Clone the repository
+2. Open Brave Browser
+3. Go to Extensions
+4. Enable Developer Mode
+5. Click "Load Unpacked"
+6. Select the extension directory
+
+## Configuration Required
+- Organization ID
+- Client ID
+- Client Secret
+- Refresh Token
+
+## Security Notes
+- Store tokens securely
+- Do not share configuration details

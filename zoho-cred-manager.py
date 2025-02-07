@@ -32,7 +32,7 @@ class CredentialManager:
         """Create config directory if it doesn't exist."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
         
-    def _generate_key(self, password: str, salt: bytes = None) -> Tuple[bytes, bytes]:
+    def _generate_key(self, password: str, salt: bytes = None) -> tuple[bytes, bytes]:
         """Generate encryption key from password."""
         if salt is None:
             salt = os.urandom(16)

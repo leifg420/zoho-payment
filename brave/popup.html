@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Zoho Invoice Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Zoho Invoice Manager</h1>
+    
+    <div class="section">
+      <h2>Quick Actions</h2>
+      <button id="listCustomersBtn">List Customers</button>
+      <button id="createInvoiceBtn">Create Invoice</button>
+      <button id="generateReportBtn">Generate Report</button>
+    </div>
+
+    <div class="section">
+      <h2>Customer Management</h2>
+      <input type="text" id="customerName" placeholder="Customer Name">
+      <input type="text" id="customerEmail" placeholder="Email">
+      <button id="addCustomerBtn">Add Customer</button>
+    </div>
+
+    <div class="section">
+      <h2>Invoice Creation</h2>
+      <input type="text" id="invoiceDescription" placeholder="Description">
+      <input type="number" id="invoiceAmount" placeholder="Amount">
+      <button id="createQuickInvoiceBtn">Create Quick Invoice</button>
+    </div>
+
+    <div id="resultArea" class="result-area"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
