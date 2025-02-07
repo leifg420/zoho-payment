@@ -1,4 +1,19 @@
+#!python3
+
 # Add these to the main argument parser subparsers
+import argparse
+import logging
+
+# Import or define CredentialManager
+try:
+    from credential_manager import CredentialManager  # type: ignore # Assuming it's defined in credential_manager.py
+except ImportError:
+    import sys
+    sys.path.append('zoho-cred-manager.py')  # Replace with the actual path to credential_manager.py
+    from credential_manager import CredentialManager # type: ignore
+
+parser = argparse.ArgumentParser(description='Zoho Payment Configuration')
+subparsers = parser.add_subparsers(dest='command', help='Sub-command help')
 
 # Config management command
 config = subparsers.add_parser('config', help='Credential management')
@@ -18,13 +33,15 @@ update.add_argument('--default-customer-id', help='Update default customer ID')
 # Delete credentials
 delete = config_sub.add_parser('delete', help='Delete all stored credentials')
 
+# Parse the arguments
+args = parser.parse_args()
+
 # Modify the main() function to handle config commands
 if args.command == 'config':
     cred_manager = CredentialManager()
     
     if args.config_command == 'setup':
-        setup_credentials()
-        return
+        cred_manager.setup_credentials()
         
     elif args.config_command == 'update':
         new_creds = {}
@@ -42,18 +59,16 @@ if args.command == 'config':
         if new_creds:
             cred_manager.update_credentials(new_creds)
             print("Credentials updated successfully!")
-        return
         
     elif args.config_command == 'delete':
         confirm = input("Are you sure you want to delete all stored credentials? (yes/no): ")
         if confirm.lower() == 'yes':
             cred_manager.delete_credentials()
             print("Credentials deleted successfully!")
-        return
 
 # Replace the config loading in main() with:
 try:
-    config = get_zoho_credentials()
+    config = cred_manager.get_zoho_credentials()
 except Exception as e:
     logging.error(f"Failed to load credentials: {str(e)}")
     raise
